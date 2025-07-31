@@ -1,0 +1,73 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { portfolioCalculator } from '@/lib/services/portfolio-calculator'
+import { FirebaseErrorHandler, type EnhancedError } from '@/lib/utils/firebase-error-handler'
+
+export async function GET(request: NextRequest) {
+  try {
+    console.log('Metrics API: Starting request')
+    
+    // Get authorization header
+    const authHeader = request.headers.get('authorization')
+    console.log('Metrics API: Auth header present:', !!authHeader)
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('Metrics API: Missing or invalid auth header')
+      return NextResponse.json(
+        { error: 'Authorization header required' },
+        { status: 401 }
+      )
+    }
+
+    // Extract user ID from token
+    const token = authHeader.split('Bearer ')[1]
+    let userId: string
+    
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]))
+      userId = payload.user_id || payload.sub
+      console.log('Metrics API: User ID extracted:', userId)
+    } catch (error) {
+      console.log('Metrics API: Token parsing error:', error)
+      return NextResponse.json(
+        { error: 'Invalid authorization token' },
+        { status: 401 }
+      )
+    }
+
+    const { searchParams } = new URL(request.url)
+    const days = parseInt(searchParams.get('days') || '30')
+    console.log('Metrics API: Days parameter:', days)
+
+    // Get portfolio metrics
+    console.log('Metrics API: Calculating portfolio metrics')
+    const metrics = await portfolioCalculator.getPortfolioMetrics(userId, days)
+    console.log('Metrics API: Metrics calculated successfully')
+
+    return NextResponse.json({
+      success: true,
+      metrics
+    })
+
+  } catch (error) {
+    // Check if it's already an enhanced error
+    if (error && typeof error === 'object' && 'code' in error && 'userMessage' in error) {
+      const enhancedError = error as EnhancedError
+      const statusCode = FirebaseErrorHandler.getHttpStatusCode(enhancedError)
+      const apiResponse = FirebaseErrorHandler.createApiErrorResponse(enhancedError)
+      
+      return NextResponse.json(apiResponse, { status: statusCode })
+    }
+    
+    // Handle other errors
+    const enhancedError = FirebaseErrorHandler.handleFirebaseError(
+      error,
+      { operation: 'getPortfolioMetrics', resource: 'portfolio-metrics' }
+    )
+    
+    FirebaseErrorHandler.logEnhancedError(enhancedError)
+    const statusCode = FirebaseErrorHandler.getHttpStatusCode(enhancedError)
+    const apiResponse = FirebaseErrorHandler.createApiErrorResponse(enhancedError)
+    
+    return NextResponse.json(apiResponse, { status: statusCode })
+  }
+}
